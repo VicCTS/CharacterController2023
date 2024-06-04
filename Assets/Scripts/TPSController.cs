@@ -4,32 +4,54 @@ using UnityEngine;
 
 public class TPSController : MonoBehaviour
 {
-    private CharacterController controller;
+    private CharacterController _controller;
+    private Animator _animator;
+    private Transform _camera;
     private float _horizontal;
     private float _vertical;
-    private Transform _camera;
 
-    //variables para controlar velocidad, altura de salto y gravedad
-    public float speed = 5;
-    public float jumpHeight = 1;
-    public float gravity = -9.81f;
+    public int shootDamage = 2;
 
-    //variables para el ground sensor
-    public bool isGrounded;
-    public Transform groundSensor;
-    public float sensorRadius = 0.1f;
-    public LayerMask ground;
-    private Vector3 playerVelocity;
+    //variables para velocidad, salto y gravedad
+    [SerializeField] private float _playerSpeed = 5;
+    [SerializeField] private float _jumpHeight = 1;
+    [SerializeField] private float _pushForce = 5;
+    [SerializeField] private float _throwForce = 10;
+    private float _gravity = -9.81f;
+    private Vector3 _playerGravity;
+    private bool _isAiming = false;
 
-    //variables para rotacion del personaje
+    //variables para rotacion
     private float turnSmoothVelocity;
-    public float turnSmoothTime = 0.1f;
+    [SerializeField] float turnSmoothTime = 0.1f;
+
+    //varibles para sensor
+    [SerializeField] private Transform _sensorPosition;
+    [SerializeField] private float _sensorRadius = 0.2f;
+    [SerializeField] private LayerMask _groundLayer;
+    private bool _isGrounded;
+
+    //Variables para coger cosas
+    public GameObject objectToGrab;
+    private GameObject grabedObject;
+    [SerializeField] private Transform _interactionZone;
+
+    float tiempoIdle;
+
+    [SerializeField]float stuntBlockTimer;
+    float stuntBlockWait = 10;
+    bool stuntBlock;
+
+    
     // Start is called before the first frame update
-    void Start()
+    void Awake()
     {
-        controller = GetComponent<CharacterController>();
+        _controller = GetComponent<CharacterController>();
+        _animator = GetComponentInChildren<Animator>();
         _camera = Camera.main.transform;
 
+        Cursor.visible = false;
+        Cursor.lockState = CursorLockMode.Locked;
     }
 
     // Update is called once per frame
@@ -38,87 +60,223 @@ public class TPSController : MonoBehaviour
         _horizontal = Input.GetAxisRaw("Horizontal");
         _vertical = Input.GetAxisRaw("Vertical");
 
-        MovementTPS();
-        Jump();
+        if(stuntBlock == true)
+        {
+            stuntBlockTimer += Time.deltaTime;
+
+            if(stuntBlockTimer >= stuntBlockWait)
+            {
+                stuntBlock = false;
+                stuntBlockTimer = 0;
+            }
+        }
+
+        if(stuntBlock == false)
+        {
+            Jump();
+
+            if(Input.GetButton("Fire2"))
+            {
+                AimMovement();
+                _isAiming = true;
+            }
+            else
+            {
+                Movement();
+                _isAiming = false;
+            }
+
+            if(Input.GetButtonDown("Fire1") && grabedObject != null && _isAiming)
+            {
+                ThrowObject();
+            }
+        }
+
+        if(Input.GetKeyDown(KeyCode.Q))
+        {
+            stuntBlock = true;
+        }
+        
+
+        
+
+        if(Input.GetKeyDown(KeyCode.K))
+        {
+            RayTest();
+        }
+
+        //RayTest();
+
+        if(Input.GetKeyDown(KeyCode.E))
+        {
+            GrabObject();
+        }
     }
 
     void Movement()
     {
-        //Creamos un Vector3 y en los ejes X y Z le asignamos los inputs de movimiento
-        Vector3 move = new Vector3(_horizontal, 0, _vertical).normalized;
+        Vector3 direction = new Vector3(_horizontal, 0, _vertical);
 
-        if(move != Vector3.zero)
+        _animator.SetFloat("VelX", 0);
+        _animator.SetFloat("VelZ", direction.magnitude);
+
+        if(direction != Vector3.zero)
         {
-            //Creamos una variable float para almacenar la posicion a la que queremos que mire el personaje
-            //Usamos la funcion Atan2 para calcular el angulo al que tendra que mirar nuestro personaje
-            //lo multiplicamos por Rad2Deg para que nos de el valor en grados y le sumamos la rotacion de la camara en Y para que segund donde mire la camara afecte a la rotacion
-            float targetAngle = Mathf.Atan2(move.x, move.z) * Mathf.Rad2Deg + _camera.eulerAngles.y;
-            //Usamos un SmoothDamp para que nos haga una transicion entre el angulo actual y al que queremos llegar
-            //de esta forma no nos rotara de golpe al personaje
-            float angle = Mathf.SmoothDampAngle(transform.eulerAngles.y, targetAngle, ref turnSmoothVelocity, turnSmoothTime);
-            //le aplicamos la rotacion al personaje
-            transform.rotation = Quaternion.Euler(0, angle, 0);
+            float targetAngle = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg + _camera.eulerAngles.y;
+            float smoothAngle = Mathf.SmoothDampAngle(transform.eulerAngles.y, targetAngle, ref turnSmoothVelocity, turnSmoothTime);
 
-            //Creamos otro Vector3 el cual multiplicaremos el angulo al que queremos que mire el personaje por un vector hacia delante
-            //para que el personaje camine en la direccion correcta a la que mira
-            Vector3 moveDirection = Quaternion.Euler(0f, targetAngle, 0f) * Vector3.forward;
-            //Funcion del character controller a la que le pasamos el Vector que habiamos creado y lo multiplicamos por la velocidad para movernos
-            controller.Move(moveDirection.normalized * speed * Time.deltaTime);
+            transform.rotation = Quaternion.Euler(0, smoothAngle, 0);
+
+            Vector3 moveDirection = Quaternion.Euler(0, targetAngle, 0) * Vector3.forward;
+
+            _controller.Move(moveDirection.normalized * _playerSpeed * Time.deltaTime);
         }
     }
 
-    void MovementTPS()
+    void AimMovement()
     {
-        //Creamos un Vector3 y en los ejes X y Z le asignamos los inputs de movimiento
-        Vector3 move = new Vector3(_horizontal, 0, _vertical).normalized;
+        Vector3 direction = new Vector3(_horizontal, 0, _vertical);
 
-        if(move != Vector3.zero)
+        _animator.SetFloat("VelX", _horizontal);
+        _animator.SetFloat("VelZ", _vertical);
+
+
+        float targetAngle = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg + _camera.eulerAngles.y;
+        float smoothAngle = Mathf.SmoothDampAngle(transform.eulerAngles.y, _camera.eulerAngles.y, ref turnSmoothVelocity, turnSmoothTime);
+
+        transform.rotation = Quaternion.Euler(0, smoothAngle, 0);
+
+        if(direction != Vector3.zero)
         {
-            //Creamos una variable float para almacenar la posicion a la que queremos que mire el personaje
-            //Usamos la funcion Atan2 para calcular el angulo al que tendra que mirar nuestro personaje
-            //lo multiplicamos por Rad2Deg para que nos de el valor en grados y le sumamos la rotacion de la camara en Y para que segund donde mire la camara afecte a la rotacion
-            float targetAngle = Mathf.Atan2(move.x, move.z) * Mathf.Rad2Deg + _camera.eulerAngles.y;
-            //Usamos un SmoothDamp para que nos haga una transicion entre el angulo actual y el de la camara
-            //de esta forma no nos rotara de golpe al personaje
-            float angle = Mathf.SmoothDampAngle(transform.eulerAngles.y, _camera.eulerAngles.y, ref turnSmoothVelocity, turnSmoothTime);
-            //le aplicamos la rotacion al personaje
-            transform.rotation = Quaternion.Euler(0, angle, 0);
+            Vector3 moveDirection = Quaternion.Euler(0, targetAngle, 0) * Vector3.forward;
 
-            //Creamos otro Vector3 el cual multiplicaremos el angulo al que queremos que mire el personaje por un vector hacia delante
-            //para que el personaje camine en la direccion correcta a la que mira
-            Vector3 moveDirection = Quaternion.Euler(0f, targetAngle, 0f) * Vector3.forward;
-            //Funcion del character controller a la que le pasamos el Vector que habiamos creado y lo multiplicamos por la velocidad para movernos
-            controller.Move(moveDirection.normalized * speed * Time.deltaTime);
+            _controller.Move(moveDirection.normalized * _playerSpeed * Time.deltaTime);
         }
     }
 
     void Jump()
     {
-        //Le asignamos a la boleana isGrounded su valor dependiendo del CheckSpher
-        //CheckSphere crea una esfera pasandole la poscion, radio y layer con la que queremos que interactue
-        //si la esfera entra en contacto con la capa que le digamos convertira nuestra boleana en true y si no entra en contacto en false
-        isGrounded = Physics.CheckSphere(groundSensor.position, sensorRadius, ground);
 
-        //Si estamos en el suelo y playervelocity es menor que 0 hacemos que le vuelva a poner el valor a 0
-        //esto es para evitar que siga aplicando fuerza de gravedad cuando estemos en el suelo y evitar comportamientos extraños
-        if(isGrounded && playerVelocity.y < 0)
+        _isGrounded = Physics.CheckSphere(_sensorPosition.position, _sensorRadius, _groundLayer);
+
+        _animator.SetBool("isJumping", !_isGrounded);
+
+        //GroundSensor version Raycast
+        RaycastHit hit;
+        _isGrounded = Physics.Raycast(_sensorPosition.position, Vector3.down, out hit, _sensorRadius, _groundLayer);
+        Debug.DrawRay(_sensorPosition.position, Vector3.down * _sensorRadius, Color.red);
+
+        if(_isGrounded && _playerGravity.y < 0)
         {
-            playerVelocity.y = 0;
+            _playerGravity.y = -2;
         }
 
-        //si estamos en el suelo y pulasamos el imput de salto hacemos que salte el personaje
-        if(isGrounded && Input.GetButtonDown("Jump"))
+        if(_isGrounded && Input.GetButtonDown("Jump"))
         {
-            //Formula para hacer que los saltos sean de una altura concreta
-            //la altura depende del valor de jumpHeight 
-            //Si jumpHeigt es 1 saltara 1 metro de alto
-            playerVelocity.y = Mathf.Sqrt(jumpHeight * -2 * gravity); 
+            _playerGravity.y = Mathf.Sqrt(_jumpHeight * -2 * _gravity);
         }
 
-        //a playervelocity.y le iremos sumando el valor de la gravedad
-        playerVelocity.y += gravity * Time.deltaTime;
-        //como playervelocity en el eje Y es un valor negativo esto nos empuja al personaje hacia abajo
-        //asi le aplicaremos la gravedad
-        controller.Move(playerVelocity * Time.deltaTime);
+        _playerGravity.y += _gravity * Time.deltaTime;
+        
+        _controller.Move(_playerGravity * Time.deltaTime);
+    }
+
+    void RayTest()
+    {
+        //Raycast simple
+        if(Physics.Raycast(transform.position, transform.forward, 10))
+        {
+            Debug.Log("Hit");
+            Debug.DrawRay(transform.position, transform.forward * 10, Color.green);
+        }
+        else
+        {
+            Debug.DrawRay(transform.position, transform.forward * 10, Color.red);
+        }
+
+        RaycastHit hit;
+        if(Physics.Raycast(transform.position, transform.forward, out hit, 10))
+        {
+            Debug.Log(hit.transform.name);
+            Debug.Log(hit.transform.position);
+            Debug.Log(hit.transform.gameObject.layer);
+            Debug.Log(hit.transform.gameObject.tag);
+        
+            if(hit.transform.gameObject.tag == "Caja")
+            {
+                //Destroy(hit.transform.gameObject);
+
+                Box caja = hit.transform.GetComponent<Box>();
+
+                if(caja != null)
+                {   
+                    caja.TakeDamage(shootDamage);
+                }
+            }
+            else if(hit.transform.gameObject.tag == "Zapato")
+            {
+                Destroy(hit.transform.gameObject);
+            }
+
+            /*Box caja = hit.transform.GetComponent<Box>();
+
+            if(caja != null)
+            {   
+                caja.TakeDamage(shootDamage);
+            }*/
+            
+        }
+    }
+
+    void OnDrawGizmos()
+    {
+        Gizmos.color = Color.green;
+        Gizmos.DrawWireSphere(_sensorPosition.position, _sensorRadius);
+    }
+
+    void OnControllerColliderHit(ControllerColliderHit hit)
+    {
+        Rigidbody body = hit.collider.attachedRigidbody;
+
+        if(body == null || body.isKinematic)
+        {
+            return;
+        }
+
+        if(hit.moveDirection.y < -0.2f)
+        {
+            return;
+        }
+
+        Vector3 pushDirection = new Vector3(hit.moveDirection.x, 0, hit.moveDirection.z);
+
+        body.velocity = pushDirection * _pushForce / body.mass;
+    }
+
+    void GrabObject()
+    {
+        if(objectToGrab != null && grabedObject == null)
+        {
+            grabedObject = objectToGrab;
+            grabedObject.transform.SetParent(_interactionZone);
+            grabedObject.transform.position = _interactionZone.position;
+            grabedObject.GetComponent<Rigidbody>().isKinematic = true;
+        }
+        else if(grabedObject != null)
+        {
+            grabedObject.GetComponent<Rigidbody>().isKinematic = false;
+            grabedObject.transform.SetParent(null);
+            grabedObject = null;
+        }
+    }
+
+    void ThrowObject()
+    {
+        Rigidbody grabedBody = grabedObject.GetComponent<Rigidbody>();
+
+        grabedBody.isKinematic = false;
+        grabedObject.transform.SetParent(null);
+        grabedBody.AddForce(_camera.transform.forward * _throwForce, ForceMode.Impulse);
+        grabedObject = null;
     }
 }
